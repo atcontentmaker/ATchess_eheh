@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modern Chess | Minimalist</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        :root {
+            --bg-dark: #262421;
+            --panel-dark: #21201d;
+            --square-light: #ebecd0;
+            --square-dark: #779556;
+            --highlight: rgba(255, 255, 0, 0.3);
+            --legal-dot: rgba(0, 0, 0, 0.1);
+            --text-main: #bababa;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .game-container {
+            display: grid;
+            grid-template-columns: 600px 300px;
+            gap: 20px;
+            background: var(--panel-dark);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        /* Board Styling */
+        #board {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            grid-template-rows: repeat(8, 1fr);
+            width: 600px;
+            height: 600px;
+            user-select: none;
+        }
+
+        .square {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            font-size: 45px;
+            cursor: pointer;
+        }
+
+        .square.light { background-color: var(--square-light); }
+        .square.dark { background-color: var(--square-dark); }
+        
+        .square.last-move { background-color: #f5f682 !important; }
+        
+        .legal-hint::after {
+            content: '';
+            width: 20px;
+            height: 20px;
+            background: var(--legal-dot);
+            border-radius: 50%;
+            position: absolute;
+        }
+
+        .piece {
+            transition: transform 0.1s ease;
+            z-index: 10;
+        }
+
+        .piece:active { cursor: grabbing; }
+
+        /* Sidebar Styling */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            background: #2b2925;
+            padding: 15px;
+            border-radius: 4px;
+        }
+
+        .move-history {
+            flex-grow: 1;
+            overflow-y: auto;
+            font-size: 14px;
+            color: var(--text-main);
+            padding: 10px;
+        }
+
+        .status-panel {
+            padding: 15px;
+            border-top: 1px solid #3d3b37;
+            text-align: center;
+        }
+
+        .turn-indicator {
+            padding: 8px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+
+        .white-turn { background: white; color: black; }
+        .black-turn { background: #403d39; color: white; }
+
+        .difficulty-select {
+            margin: 12px 0;
+            padding: 8px;
+            background: #3d3b37;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 4px;
+            width: 100%;
+        }
+
+        .thinking {
+            color: #ffeb3b;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+
+<div class="game-container">
+    <div id="board"></div>
+    
+    <div class="sidebar">
+        <h3 style="margin-top:0">Move History</h3>
+        <div id="moveList" class="move-history"></div>
+        <div class="status-panel">
+            <div id="turnStatus" class="turn-indicator white-turn">White's Turn</div>
+            <div style="margin: 12px 0;">
+                <label for="difficulty">AI Difficulty: </label>
+                <select id="difficulty" class="difficulty-select">
+                    <option value="5">Easy (depth 5)</option>
+                    <option value="10" selected>Medium (depth 10)</option>
+                    <option value="15">Hard (depth 15)</option>
+                </select>
+            </div>
+            <button onclick="resetGame()" style="width:100%; padding:10px; cursor:pointer; background:#3d3b37; color:white; border:none; border-radius:4px;">New Game</button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ────────────────────────────────────────────────
+//  Stockfish Web Worker setup
+// ────────────────────────────────────────────────
+let stockfishWorker = null;
+let isThinking = false;
+
+function initStockfish() {
+    if (stockfishWorker) {
+        stockfishWorker.terminate();
+    }
+
+    // Using nmrugg/stockfish.js — reliable WASM + worker friendly version
+    // You can host these files locally if you prefer (recommended for production/offline)
+    stockfishWorker = new Worker('stockfish-18-lite-single.js');  
+
+    stockfishWorker.onmessage = function (event) {
+        const line = event.data.trim();
+
+        // Stockfish is ready
+        if (line === 'uciok') {
+            stockfishWorker.postMessage('isready');
+        }
+        else if (line === 'readyok') {
+            stockfishWorker.postMessage('ucinewgame');
+            // We can now use it
+        }
+        // Best move received
+        else if (line.startsWith('bestmove')) {
+            if (isThinking && game.turn() === 'b') {
+                const parts = line.split(' ');
+                const bestMove = parts[1];
+
+                if (bestMove && bestMove.length >= 4) {
+                    const from = bestMove.substring(0,2);
+                    const to   = bestMove.substring(2,4);
+
+                    // Make the move (we assume promotion to queen — simple version)
+                    const moveResult = game.move({ from, to, promotion: 'q' });
+
+                    if (moveResult) {
+                        createBoard();
+                        updateMoveHistory();
+                        // Optional: highlight last move (you can extend this)
+                    }
+                }
+                isThinking = false;
+                updateStatus();
+            }
+        }
+    };
+
+    // Initialize UCI engine
+    stockfishWorker.postMessage('uci');
+}
+
+function getDepth() {
+    return parseInt(document.getElementById('difficulty').value) || 10;
+}
+
+function askEngineToPlay() {
+    if (!stockfishWorker || game.turn() !== 'b' || game.game_over() || isThinking) return;
+
+    isThinking = true;
+    turnStatus.innerHTML = `Black thinking... <span class="thinking">(depth ${getDepth()})</span>`;
+    turnStatus.className = 'turn-indicator black-turn';
+
+    // Set position and ask for best move
+    stockfishWorker.postMessage(`position fen ${game.fen()}`);
+    stockfishWorker.postMessage(`go depth ${getDepth()}`);
+}
+
+// ────────────────────────────────────────────────
+//  Your original code + engine integration points
+// ────────────────────────────────────────────────
+const boardElement = document.getElementById('board');
+const moveListElement = document.getElementById('moveList');
+const turnStatus = document.getElementById('turnStatus');
+const game = new Chess();
+
+const pieceIcons = {
+    'p': 'fa-chess-pawn', 'r': 'fa-chess-rook', 'n': 'fa-chess-knight',
+    'b': 'fa-chess-bishop', 'q': 'fa-chess-queen', 'k': 'fa-chess-king'
+};
+
+let selectedSquare = null;
+
+function createBoard() {
+    boardElement.innerHTML = '';
+    const boardState = game.board();
+
+    for (let i = 0; i < 8; i++) {
+        for (let j = 0; j < 8; j++) {
+            const square = document.createElement('div');
+            const squareName = String.fromCharCode(97 + j) + (8 - i);
+            const isDark = (i + j) % 2 !== 0;
+
+            square.classList.add('square', isDark ? 'dark' : 'light');
+            square.dataset.pos = squareName;
+
+            const piece = boardState[i][j];
+            if (piece) {
+                const pieceEl = document.createElement('i');
+                pieceEl.classList.add('fa-solid', pieceIcons[piece.type], 'piece');
+                pieceEl.style.color = piece.color === 'w' ? '#fff' : '#000';
+                pieceEl.draggable = true;
+                
+                pieceEl.addEventListener('dragstart', (e) => handleDragStart(e, squareName));
+                square.appendChild(pieceEl);
+            }
+
+            square.addEventListener('dragover', (e) => e.preventDefault());
+            square.addEventListener('drop', (e) => handleDrop(e, squareName));
+            square.addEventListener('click', () => handleSquareClick(squareName));
+
+            boardElement.appendChild(square);
+        }
+    }
+    updateStatus();
+}
+
+function handleDragStart(e, pos) {
+    selectedSquare = pos;
+    highlightLegalMoves(pos);
+}
+
+function handleDrop(e, to) {
+    e.preventDefault();
+    makeMove(selectedSquare, to);
+}
+
+function handleSquareClick(pos) {
+    if (selectedSquare === pos) {
+        clearHighlights();
+        selectedSquare = null;
+    } else if (selectedSquare) {
+        makeMove(selectedSquare, pos);
+    } else {
+        const piece = game.get(pos);
+        if (piece && piece.color === game.turn()) {
+            selectedSquare = pos;
+            highlightLegalMoves(pos);
+        }
+    }
+}
+
+function makeMove(from, to) {
+    const move = game.move({ from, to, promotion: 'q' });
+
+    if (move) {
+        createBoard();
+        updateMoveHistory();
+        selectedSquare = null;
+        clearHighlights();
+
+        // After human move → let engine think if it's black's turn
+        setTimeout(askEngineToPlay, 150); // small delay for better UX
+    } else {
+        clearHighlights();
+        selectedSquare = null;
+    }
+}
+
+function highlightLegalMoves(pos) {
+    clearHighlights();
+    const moves = game.moves({ square: pos, verbose: true });
+    moves.forEach(m => {
+        const sq = document.querySelector(`[data-pos="${m.to}"]`);
+        sq.classList.add('legal-hint');
+    });
+}
+
+function clearHighlights() {
+    document.querySelectorAll('.square').forEach(sq => {
+        sq.classList.remove('legal-hint');
+    });
+}
+
+function updateMoveHistory() {
+    const history = game.history();
+    moveListElement.innerHTML = '';
+    for (let i = 0; i < history.length; i += 2) {
+        const moveRow = document.createElement('div');
+        moveRow.style.padding = '4px 0';
+        moveRow.innerHTML = `<strong>${Math.floor(i/2) + 1}.</strong> ${history[i]} ${history[i+1] || ''}`;
+        moveListElement.appendChild(moveRow);
+    }
+    moveListElement.scrollTop = moveListElement.scrollHeight;
+}
+
+function updateStatus() {
+    if (isThinking) return; 
+
+    const turn = game.turn() === 'w' ? 'White' : 'Black';
+    turnStatus.innerText = `${turn}'s Turn`;
+    turnStatus.className = `turn-indicator ${game.turn() === 'w' ? 'white-turn' : 'black-turn'}`;
+
+    if (game.in_checkmate()) {
+        turnStatus.innerText = `Checkmate! ${turn === 'White' ? 'Black' : 'White'} wins.`;
+    } else if (game.in_draw()) {
+        turnStatus.innerText = "Draw!";
+    }
+
+    // --- ADD THIS PART BELOW ---
+    // This tells the Analysis script to check if it should show the button
+    if (typeof window.syncAnalysisButton === 'function') {
+        window.syncAnalysisButton();
+    }
+}
+// Make the function globally accessible
+window.updateStatus = updateStatus;
+
+function resetGame() {
+    game.reset();
+    moveListElement.innerHTML = '';
+    isThinking = false;
+    createBoard();
+    stockfishWorker?.postMessage('ucinewgame');
+}
+
+document.getElementById('difficulty').addEventListener('change', () => {
+    // Optional: can force engine to re-think with new depth if you want
+    // For simplicity we just apply new depth on next search
+});
+
+// Initialize
+createBoard();
+initStockfish();
+</script>
+<script src="chess-analysis.js"></script>
+<script src="accuracy.js"></script>
+<script src="review-mode.js"></script>
+<script src="replay-animation.js"></script> 
+<script src="move-sounds.js"></script>
+<script src="move-sounds.js"></script>
+<script src="opening-detection.js"></script>
+
+</body>
+</html>
