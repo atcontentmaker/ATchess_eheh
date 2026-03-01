@@ -80,21 +80,24 @@
         .piece:active { cursor: grabbing; }
 
         /* Sidebar Styling */
-        .sidebar {
-            display: flex;
-            flex-direction: column;
-            background: #2b2925;
-            padding: 15px;
-            border-radius: 4px;
-        }
+       .sidebar {
+    display: flex;
+    flex-direction: column;
+    background: #2b2925;
+    padding: 15px;
+    border-radius: 4px;
+    height: 600px; /* Match the board height */
+    box-sizing: border-box; /* Ensure padding doesn't add to height */
+}
 
-        .move-history {
-            flex-grow: 1;
-            overflow-y: auto;
-            font-size: 14px;
-            color: var(--text-main);
-            padding: 10px;
-        }
+.move-history {
+    flex-grow: 1;
+    overflow-y: auto;
+    max-height: 400px; /* Give it a limit */
+    font-size: 14px;
+    color: var(--text-main);
+    padding: 10px;
+}
 
         .status-panel {
             padding: 15px;
@@ -338,7 +341,14 @@ function updateMoveHistory() {
         moveRow.innerHTML = `<strong>${Math.floor(i/2) + 1}.</strong> ${history[i]} ${history[i+1] || ''}`;
         moveListElement.appendChild(moveRow);
     }
-    moveListElement.scrollTop = moveListElement.scrollHeight;
+    
+    // Use requestAnimationFrame to ensure the DOM has rendered before scrolling
+    requestAnimationFrame(() => {
+        moveListElement.scrollTo({
+            top: moveListElement.scrollHeight,
+            behavior: 'smooth' // This often prevents the "harsh" page jump
+        });
+    });
 }
 
 function updateStatus() {
@@ -384,7 +394,6 @@ initStockfish();
 <script src="accuracy.js"></script>
 <script src="review-mode.js"></script>
 <script src="replay-animation.js"></script> 
-<script src="move-sounds.js"></script>
 <script src="move-sounds.js"></script>
 <script src="opening-detection.js"></script>
 
